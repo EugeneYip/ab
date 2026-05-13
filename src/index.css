@@ -1,0 +1,125 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222.2 84% 4.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 84% 4.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 84% 4.9%;
+    --primary: 222.2 47.4% 11.2%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 210 40% 96.1%;
+    --secondary-foreground: 222.2 47.4% 11.2%;
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+    --accent: 210 40% 96.1%;
+    --accent-foreground: 222.2 47.4% 11.2%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+    --ring: 222.2 84% 4.9%;
+    --radius: 0.5rem;
+
+    --lp-bg: #FCFAF2;
+    --lp-heading: #241F1A;
+    --lp-body: #2F2A24;
+    --lp-text: #4B443C;
+    --lp-muted: #6B6257;
+    --lp-subtle: #5C5247;
+    --lp-dim: #8A7F72;
+    --lp-hint: #A89A87;
+    --lp-border: #E9E0D2;
+    --lp-border-mid: #D9CEBD;
+    --lp-border-hover: #DDD3C3;
+    --lp-border-accent: #D4C4AB;
+    --lp-border-tip: #EFE5D8;
+    --lp-divider: #F0E7DA;
+    --lp-accent: #A67B5B;
+    --lp-accent-tint: #C4A97D;
+    --lp-raised: #F4EEE1;
+    --lp-hover: #FAF6ED;
+    --lp-watermark: #F0E7DA;
+    --lp-surface-rgb: 255,255,255;
+    --lp-surface-solid: #ffffff;
+    --lp-shadow-rgb: 54,42,27;
+    --lp-cta-bg: #2F2A24;
+    --lp-cta-fg: #ffffff;
+    --lp-cta-hover: #1F1A16;
+    --lp-footer-icon: #C4B5A5;
+    --lp-hero-grad: radial-gradient(ellipse 80% 60% at 100% 0%,rgba(166,123,91,0.07) 0%,transparent 70%),linear-gradient(180deg,rgba(255,255,255,0.95) 0%,rgba(252,250,242,0.92) 100%);
+    --lp-accent-soft: rgba(166,123,91,0.15);
+    --lp-accent-bar: rgba(166,123,91,0.50);
+    --lp-border-tag: rgba(233,224,210,0.70);
+    --lp-accent-tint-soft: rgba(196,169,125,0.50);
+    --lp-ring: rgba(196,169,125,0.40);
+  }
+
+  .dark {
+    color-scheme: dark;
+    --background: 30 9% 9%;
+    --foreground: 33 16% 91%;
+    --card: 30 12% 12%;
+    --card-foreground: 33 16% 91%;
+    --popover: 30 12% 12%;
+    --popover-foreground: 33 16% 91%;
+    --primary: 33 16% 91%;
+    --primary-foreground: 30 9% 9%;
+    --secondary: 27 11% 16%;
+    --secondary-foreground: 33 16% 91%;
+    --muted: 27 11% 16%;
+    --muted-foreground: 28 8% 50%;
+    --accent: 27 11% 16%;
+    --accent-foreground: 33 16% 91%;
+    --destructive: 0 63% 31%;
+    --destructive-foreground: 33 16% 91%;
+    --border: 27 11% 16%;
+    --input: 27 11% 16%;
+    --ring: 30 20% 60%;
+    --lp-bg: #1A1816;
+    --lp-heading: #EDE8E0;
+    --lp-body: #D4CEC4;
+    --lp-text: #B0A898;
+    --lp-muted: #8A8279;
+    --lp-subtle: #8A8279;
+    --lp-dim: #6B6257;
+    --lp-hint: #5C5247;
+    --lp-border: #332E27;
+    --lp-border-mid: #3D3730;
+    --lp-border-hover: #4A4239;
+    --lp-border-accent: #4A4035;
+    --lp-border-tip: #332E27;
+    --lp-divider: #2E2A24;
+    --lp-accent: #C4946E;
+    --lp-accent-tint: #C4A97D;
+    --lp-raised: #2E2A24;
+    --lp-hover: #2A2622;
+    --lp-watermark: #282420;
+    --lp-surface-rgb: 34,32,25;
+    --lp-surface-solid: #2E2A24;
+    --lp-shadow-rgb: 0,0,0;
+    --lp-cta-bg: #EDE8E0;
+    --lp-cta-fg: #1A1816;
+    --lp-cta-hover: #FFFFFF;
+    --lp-footer-icon: #5C5247;
+    --lp-hero-grad: radial-gradient(ellipse 80% 60% at 100% 0%,rgba(196,148,110,0.06) 0%,transparent 70%),linear-gradient(180deg,rgba(30,28,25,0.95) 0%,rgba(26,24,22,0.92) 100%);
+    --lp-accent-soft: rgba(196,148,110,0.20);
+    --lp-accent-bar: rgba(196,148,110,0.40);
+    --lp-border-tag: rgba(51,46,39,0.70);
+    --lp-accent-tint-soft: rgba(196,169,125,0.35);
+    --lp-ring: rgba(196,169,125,0.30);
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}

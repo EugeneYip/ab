@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="theme-color" content="#FCFAF2" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#1A1816" media="(prefers-color-scheme: dark)" />
+    <script>
+      (function(){try{var s=localStorage.getItem("aiweb-theme");var d=s?s==="dark":matchMedia("(prefers-color-scheme:dark)").matches;if(d)document.documentElement.classList.add("dark")}catch(e){}})();
+    </script>
+
+    <!--
+      Replace the title, description, and other meta tags below with your own.
+      See the README "Customize" section for details.
+    -->
+    <title>My Website</title>
+    <meta name="description" content="Co-work website developed with AI, supported by aiweb.eugeneyip.com" />
+    <meta name="author" content="Eugene Yip" />
+    <meta name="robots" content="index, follow, max-image-preview:large" />
+    <link rel="canonical" href="https://aiweb.eugeneyip.com/" />
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="My Website" />
+    <meta property="og:title" content="My Website" />
+    <meta property="og:description" content="Co-work website developed with AI, supported by aiweb.eugeneyip.com" />
+    <meta property="og:url" content="https://aiweb.eugeneyip.com/" />
+
+    <!-- Twitter / X -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="My Website" />
+    <meta name="twitter:description" content="Co-work website developed with AI, supported by aiweb.eugeneyip.com" />
+    <!--
+      Google Analytics — uncomment and replace G-XXXXXXXXXX with your
+      Measurement ID. Left commented so the template doesn't send hits
+      to a non-existent property on every page load.
+    -->
+    <!--
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-XXXXXXXXXX"></script>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){dataLayer.push(arguments);}
+      gtag('js', new Date());
+      gtag('config', 'G-XXXXXXXXXX');
+    </script>
+    -->
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

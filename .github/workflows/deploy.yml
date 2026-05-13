@@ -1,0 +1,79 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CUSTOM_DOMAIN: ${{ vars.CUSTOM_DOMAIN }}
+
+      - name: Configure CNAME
+        run: |
+          if [ -n "${{ vars.CUSTOM_DOMAIN }}" ]; then
+            echo "${{ vars.CUSTOM_DOMAIN }}" > ./dist/CNAME
+          elif [ -f ./dist/CNAME ] && ! grep -qv '^#\|^[[:space:]]*$' ./dist/CNAME; then
+            rm -f ./dist/CNAME
+          fi
+
+      - name: Setup Pages
+        id: pages
+        uses: actions/configure-pages@v5
+        continue-on-error: true
+
+      - name: Upload artifact
+        if: steps.pages.outcome == 'success'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: "./dist"
+
+      - name: Deploy to GitHub Pages
+        if: steps.pages.outcome == 'success'
+        id: deployment
+        uses: actions/deploy-pages@v5
+
+      - name: Pages not enabled
+        if: steps.pages.outcome != 'success'
+        run: |
+          echo ""
+          echo "============================================================"
+          echo "  GitHub Pages is not enabled yet."
+          echo ""
+          echo "  1. Go to Settings → Pages in your repository"
+          echo "  2. Set Source to \"GitHub Actions\""
+          echo "  3. Push again or re-run this workflow"
+          echo "============================================================"
+          echo ""
+          echo "::error::GitHub Pages is not enabled. Go to Settings → Pages → set Source to \"GitHub Actions\", then re-run this workflow."
+          exit 1

@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" shape-rendering="geometricPrecision">
+  <g transform="translate(32 32) scale(0.77922) translate(-62.5 -67.5)">
+    <path
+      fill="#A07D60"
+      fill-rule="evenodd"
+      d="M62.5 29.505
+         a13.995 13.995 0 1 1 0 27.99
+         a13.995 13.995 0 0 1 0-27.99
+         Z
+         M62.5 36.65
+         a6.85 6.85 0 1 0 0 13.7
+         a6.85 6.85 0 0 0 0-13.7
+         Z"/>
+    <line
+      x1="62.5" y1="53.73" x2="62.5" y2="102.5"
+      stroke="#A07D60" stroke-width="6.85" stroke-linecap="round"/>
+    <path
+      d="M38.02 67.94
+         H28
+         A5.32 5.32 0 0 0 27.44 72.69
+         A38.03 38.03 0 0 0 62.5 103.49
+         A38.03 38.03 0 0 0 97.56 72.69
+         A5.32 5.32 0 0 0 97 67.94
+         H86.98"
+      stroke="#A07D60"
+      stroke-width="6.85"
+      stroke-linecap="round"
+      stroke-linejoin="round"/>
+  </g>
+</svg>
