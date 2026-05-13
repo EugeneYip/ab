@@ -1,13 +1,31 @@
 import React, { useMemo, useState } from "react";
 
+const COLORS = {
+  bg: "#FCFAF2",
+  ink: "#1F1F1F",
+  sumi: "#2B2B2B",
+  hai: "#828282",
+  gofun: "#FFFFFB",
+  mizu: "#EAF6F6",
+  byakuroku: "#D7E7D6",
+  toki: "#F7D7CF",
+  benihi: "#E95464",
+  ai: "#165E83",
+  nando: "#2C4F54",
+  kokimurasaki: "#4A225D",
+  kikuchiba: "#D19826",
+  usuki: "#FAD689",
+};
+
 const safe = (value, fallback = 0) => {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
 };
+
 const clamp = (value, min, max) => Math.min(Math.max(safe(value), min), max);
-const fmt = (value, digits = 0) => Number.isFinite(value) ? value.toLocaleString(undefined, { maximumFractionDigits: digits, minimumFractionDigits: digits }) : "–";
-const pct = (value, digits = 2) => Number.isFinite(value) ? `${value.toFixed(digits)}%` : "–";
-const money = (value) => Number.isFinite(value) ? value.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 0 }) : "–";
+const fmt = (value, digits = 0) => Number.isFinite(value) ? value.toLocaleString(undefined, { maximumFractionDigits: digits, minimumFractionDigits: digits }) : "---";
+const pct = (value, digits = 2) => Number.isFinite(value) ? `${value.toFixed(digits)}%` : "---";
+const money = (value) => Number.isFinite(value) ? value.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 0 }) : "---";
 
 function erf(x) {
   const sign = x >= 0 ? 1 : -1;
@@ -52,15 +70,14 @@ function inverseNormal(p) {
     (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1);
 }
 
-function sampleSizePerGroup({ confidence, power, baseline, mde, relative, variants, sided, correction }) {
+function sampleSizePerGroup({ confidence, power, baselinePct, liftPct, variantsIncludingControl, sided = "one" }) {
   const alpha = 1 - clamp(confidence, 50, 99.999) / 100;
   const beta = 1 - clamp(power, 1, 99.999) / 100;
-  const p1 = clamp(baseline, 0.0001, 99.9999) / 100;
-  const delta = relative ? p1 * (safe(mde) / 100) : safe(mde) / 100;
-  const p2 = clamp(p1 + delta, 0.000001, 0.999999);
-  const absDelta = Math.abs(p2 - p1);
-  if (!absDelta) return NaN;
-  const comparisons = correction ? Math.max(1, Math.floor(safe(variants, 1))) : 1;
+  const p1 = clamp(baselinePct, 0.0001, 99.999) / 100;
+  const p2 = clamp(p1 * (1 + safe(liftPct) / 100), 0.000001, 0.999999);
+  const delta = Math.abs(p2 - p1);
+  if (!delta) return NaN;
+  const comparisons = Math.max(1, Math.floor(safe(variantsIncludingControl, 2)) - 1);
   const adjustedAlpha = alpha / comparisons;
   const zAlpha = inverseNormal(sided === "two" ? 1 - adjustedAlpha / 2 : 1 - adjustedAlpha);
   const zBeta = inverseNormal(1 - beta);
@@ -69,378 +86,508 @@ function sampleSizePerGroup({ confidence, power, baseline, mde, relative, varian
     zAlpha * Math.sqrt(2 * pooled * (1 - pooled)) + zBeta * Math.sqrt(p1 * (1 - p1) + p2 * (1 - p2)),
     2
   );
-  return Math.ceil(numerator / Math.pow(absDelta, 2));
+  return Math.ceil(numerator / Math.pow(delta, 2));
 }
 
-function solveDetectableEffect({ confidence, power, baseline, visitorsPerGroup, variants, sided, correction }) {
-  const p1 = clamp(baseline, 0.0001, 99.999) / 100;
-  const n = safe(visitorsPerGroup);
-  if (n <= 0) return { absolute: NaN, relative: NaN };
-  let low = 0.000001;
-  let high = Math.max(0.000002, Math.min(0.95, 0.999999 - p1));
+function solveMdeForVisitors({ confidence, power, baselinePct, visitorsPerVariant, variantsIncludingControl, sided = "one" }) {
+  const n = safe(visitorsPerVariant);
+  const base = clamp(baselinePct, 0.0001, 99.999) / 100;
+  if (n <= 0 || base <= 0) return NaN;
+  let low = 0.0001;
+  let high = 500;
   for (let i = 0; i < 70; i += 1) {
     const mid = (low + high) / 2;
-    const needed = sampleSizePerGroup({ confidence, power, baseline, mde: mid * 100, relative: false, variants, sided, correction });
+    const needed = sampleSizePerGroup({ confidence, power, baselinePct, liftPct: mid, variantsIncludingControl, sided });
     if (needed > n) low = mid;
     else high = mid;
   }
-  const absolute = high * 100;
-  const relative = (high / p1) * 100;
-  return { absolute, relative };
+  return high;
 }
 
-function analyzeVariant(controlVisitors, controlConversions, variantVisitors, variantConversions, confidence) {
-  const n1 = Math.max(1, safe(controlVisitors));
-  const n2 = Math.max(1, safe(variantVisitors));
+function analyze(controlUsers, controlConversions, variantUsers, variantConversions, confidence, sided = "one") {
+  const n1 = Math.max(1, safe(controlUsers));
+  const n2 = Math.max(1, safe(variantUsers));
   const x1 = clamp(controlConversions, 0, n1);
   const x2 = clamp(variantConversions, 0, n2);
   const p1 = x1 / n1;
   const p2 = x2 / n2;
   const diff = p2 - p1;
-  const lift = p1 > 0 ? diff / p1 : NaN;
-  const alpha = 1 - clamp(confidence, 50, 99.999) / 100;
-  const zTwo = inverseNormal(1 - alpha / 2);
-  const zOne = inverseNormal(1 - alpha);
-
+  const lift = p1 ? diff / p1 : NaN;
   const pooled = (x1 + x2) / (n1 + n2);
   const sePooled = Math.sqrt(pooled * (1 - pooled) * (1 / n1 + 1 / n2));
-  const z = sePooled > 0 ? diff / sePooled : 0;
-  const oneSidedP = 1 - normalCdf(z);
-  const twoSidedP = 2 * (1 - normalCdf(Math.abs(z)));
-
-  const seAbs = Math.sqrt((p1 * (1 - p1)) / n1 + (p2 * (1 - p2)) / n2);
-  const ciLow = diff - zTwo * seAbs;
-  const ciHigh = diff + zTwo * seAbs;
-  const rightLow = diff - zOne * seAbs;
-  const leftHigh = diff + zOne * seAbs;
-
-  const var1 = (p1 * (1 - p1)) / n1;
-  const var2 = (p2 * (1 - p2)) / n2;
-  const seRel = p1 > 0 ? Math.sqrt(var2 / (p1 * p1) + (p2 * p2 * var1) / Math.pow(p1, 4)) : NaN;
-  const relZ = seRel > 0 ? lift / seRel : NaN;
-  const relP = Number.isFinite(relZ) ? 2 * (1 - normalCdf(Math.abs(relZ))) : NaN;
-  const relCiLow = lift - zTwo * seRel;
-  const relCiHigh = lift + zTwo * seRel;
-  const relRightLow = lift - zOne * seRel;
-  const relLeftHigh = lift + zOne * seRel;
-
+  const z = sePooled ? diff / sePooled : 0;
+  const oneP = 1 - normalCdf(z);
+  const twoP = 2 * (1 - normalCdf(Math.abs(z)));
+  const alpha = 1 - clamp(confidence, 50, 99.999) / 100;
+  const zCrit = inverseNormal(sided === "two" ? 1 - alpha / 2 : 1 - alpha);
+  const se = Math.sqrt((p1 * (1 - p1)) / n1 + (p2 * (1 - p2)) / n2);
+  const ciLow = diff - zCrit * se;
+  const ciHigh = sided === "two" ? diff + zCrit * se : Infinity;
   const a1 = x1 + 1;
   const b1 = n1 - x1 + 1;
   const a2 = x2 + 1;
   const b2 = n2 - x2 + 1;
-  const mean1 = a1 / (a1 + b1);
-  const mean2 = a2 / (a2 + b2);
-  const betaVar1 = (a1 * b1) / (Math.pow(a1 + b1, 2) * (a1 + b1 + 1));
-  const betaVar2 = (a2 * b2) / (Math.pow(a2 + b2, 2) * (a2 + b2 + 1));
-  const bayesVariant = normalCdf((mean2 - mean1) / Math.sqrt(betaVar1 + betaVar2));
+  const m1 = a1 / (a1 + b1);
+  const m2 = a2 / (a2 + b2);
+  const v1 = (a1 * b1) / (Math.pow(a1 + b1, 2) * (a1 + b1 + 1));
+  const v2 = (a2 * b2) / (Math.pow(a2 + b2, 2) * (a2 + b2 + 1));
+  const bayesVariant = normalCdf((m2 - m1) / Math.sqrt(v1 + v2));
   const bayesControl = 1 - bayesVariant;
-  const boundedVariant = clamp(bayesVariant, 0.000001, 0.999999);
-  const bayesFactor = boundedVariant / (1 - boundedVariant);
-
-  return {
-    n1, n2, x1, x2, p1, p2, diff, lift,
-    seAbs, z, oneSidedP, twoSidedP,
-    ciLow, ciHigh, rightLow, leftHigh,
-    seRel, relZ, relP, relCiLow, relCiHigh, relRightLow, relLeftHigh,
-    bayesVariant, bayesControl, bayesFactor,
-  };
+  const bayesFactor = clamp(bayesVariant, 0.000001, 0.999999) / clamp(bayesControl, 0.000001, 0.999999);
+  return { n1, n2, x1, x2, p1, p2, diff, lift, se, z, oneP, twoP, ciLow, ciHigh, bayesVariant, bayesControl, bayesFactor };
 }
 
-function Field({ label, value, setValue, suffix, min = 0, step = "any" }) {
+function InputField({ label, value, setValue, suffix, hint }) {
   return (
-    <label className="block">
-      <span className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">{label}</span>
-      <div className="mt-2 flex items-center rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm focus-within:border-slate-900">
+    <label className="block min-w-0">
+      <span className="block text-[12px] font-semibold leading-tight text-stone-700 md:text-[13px]">{label}</span>
+      <div className="mt-1.5 flex min-h-10 items-center rounded-lg border border-stone-300 bg-white px-3 transition focus-within:border-[#165E83] focus-within:ring-2 focus-within:ring-[#165E83]/15">
         <input
           type="number"
-          min={min}
-          step={step}
           value={value}
           onChange={(e) => setValue(e.target.value)}
-          className="w-full bg-transparent text-base font-semibold text-slate-900 outline-none"
+          className="min-w-0 flex-1 bg-transparent py-2 text-[15px] font-semibold tabular-nums text-stone-950 outline-none"
         />
-        {suffix && <span className="ml-2 text-sm font-medium text-slate-500">{suffix}</span>}
+        {suffix && <span className="ml-1.5 shrink-0 text-sm font-bold text-stone-600">{suffix}</span>}
       </div>
+      {hint && <span className="mt-1 block text-[11px] leading-snug text-stone-500">{hint}</span>}
     </label>
   );
 }
 
-function Metric({ label, value, tone = "default" }) {
-  const toneClass = tone === "good" ? "text-emerald-700" : tone === "bad" ? "text-rose-700" : "text-slate-950";
+function StepLabel({ number, text }) {
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">{label}</div>
-      <div className={`mt-2 text-2xl font-black ${toneClass}`}>{value}</div>
-    </div>
-  );
-}
-
-function Toggle({ label, options, value, setValue }) {
-  return (
-    <div className="rounded-2xl bg-slate-100 p-3">
-      <div className="text-xs font-bold uppercase tracking-[0.14em] text-slate-500">{label}</div>
-      <div className="mt-2 grid gap-2" style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }}>
-        {options.map((option) => (
-          <button key={option.value} onClick={() => setValue(option.value)} className={`rounded-xl px-3 py-2 text-sm font-bold ${value === option.value ? "bg-slate-950 text-white" : "bg-white text-slate-600"}`}>
-            {option.label}
-          </button>
-        ))}
+    <div className="hidden w-[172px] shrink-0 md:block lg:w-[210px]">
+      <div className="sticky top-[92px] flex items-start gap-3">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-stone-200 bg-white text-lg font-semibold text-stone-900 shadow-sm">{number}</div>
+        <div className="pt-1.5 text-[12px] font-medium leading-snug text-stone-700 lg:text-[13px]">{text}</div>
       </div>
     </div>
   );
 }
 
-function CompactRow({ label, value }) {
+function Panel({ children, className = "" }) {
+  return <section className={`overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm ${className}`}>{children}</section>;
+}
+
+function PanelTitle({ title, subtitle }) {
   return (
-    <div className="flex items-start justify-between gap-4 border-b border-slate-100 py-2 text-sm">
-      <span className="font-semibold text-slate-500">{label}</span>
-      <span className="text-right font-black text-slate-950">{value}</span>
+    <div className="mb-4 min-w-0">
+      <h2 className="text-[22px] font-semibold leading-tight tracking-tight text-stone-950 md:text-[25px]">{title}</h2>
+      {subtitle && <p className="mt-1 max-w-[68ch] text-[13px] leading-5 text-stone-600">{subtitle}</p>}
     </div>
   );
 }
 
+function OutputArea({ label, value, tone = "neutral" }) {
+  const color = tone === "good" ? "text-emerald-700" : tone === "bad" ? "text-[#E95464]" : "text-stone-900";
+  return (
+    <div className="flex min-h-[92px] flex-col justify-center bg-[#EAF6F6] p-4 md:p-5">
+      <div className="text-[12px] font-bold uppercase tracking-[0.08em] text-stone-600">{label}</div>
+      <div className={`mt-2 break-words text-[20px] font-black tabular-nums leading-tight ${color}`}>{value}</div>
+    </div>
+  );
+}
+
+function OutputMini({ label, value, tone = "neutral" }) {
+  const color = tone === "good" ? "text-emerald-700" : tone === "bad" ? "text-[#E95464]" : "text-stone-950";
+  return (
+    <div className="min-w-0 rounded-xl border border-sky-100 bg-white/55 p-3">
+      <div className="min-h-[30px] text-[11px] font-bold uppercase tracking-[0.06em] leading-tight text-stone-600">{label}</div>
+      <div className={`mt-2 break-words text-[15px] font-black tabular-nums leading-tight ${color}`}>{value}</div>
+    </div>
+  );
+}
+
+function ResultLine({ label, value }) {
+  return (
+    <div className="grid grid-cols-[1fr_auto] items-center gap-3 border-b border-sky-100 py-2.5 text-[13px] md:text-sm">
+      <span className="font-semibold leading-snug text-stone-700">{label}</span>
+      <span className="text-right font-black tabular-nums text-stone-950">{value}</span>
+    </div>
+  );
+}
+
+function DenseTable({ children }) {
+  return <div className="overflow-x-auto rounded-xl border border-stone-200 bg-white">{children}</div>;
+}
+
+function StickySummary({ activeTab, testSummary, preSummary }) {
+  const items = activeTab === "test" ? testSummary : preSummary;
+  return (
+    <aside className="sticky top-0 z-30 border-y border-stone-200 bg-[#FCFAF2]/95 px-4 py-2 backdrop-blur md:top-0">
+      <div className="mx-auto grid max-w-[1320px] grid-cols-2 gap-2 md:grid-cols-4 lg:grid-cols-6">
+        {items.map((item) => (
+          <div key={item.label} className="min-w-0 rounded-xl border border-stone-200 bg-white/75 px-3 py-2">
+            <div className="truncate text-[10px] font-bold uppercase tracking-[0.08em] text-stone-500">{item.label}</div>
+            <div className="mt-0.5 truncate text-[13px] font-black tabular-nums text-stone-950 md:text-sm">{item.value}</div>
+          </div>
+        ))}
+      </div>
+    </aside>
+  );
+}
+
 export default function App() {
-  const [mode, setMode] = useState("pre");
-  const [confidence, setConfidence] = useState(95);
-  const [power, setPower] = useState(80);
-  const [baseline, setBaseline] = useState(10);
-  const [mde, setMde] = useState(20);
-  const [variants, setVariants] = useState(1);
-  const [weeklyTraffic, setWeeklyTraffic] = useState(10000);
-  const [relative, setRelative] = useState("yes");
-  const [sided, setSided] = useState("one");
-  const [correction, setCorrection] = useState("yes");
+  const [tab, setTab] = useState("test");
+  const [method, setMethod] = useState("bayesian");
+  const [side, setSide] = useState("one");
 
   const [testDays, setTestDays] = useState(14);
   const [trafficPct, setTrafficPct] = useState(100);
+  const [controlUsers, setControlUsers] = useState(10000);
+  const [controlConversions, setControlConversions] = useState(1000);
+  const [variants, setVariants] = useState([{ id: 1, users: 10000, conversions: 1120 }]);
+
+  const [sampleBase, setSampleBase] = useState(10);
+  const [sampleConfidence, setSampleConfidence] = useState(95);
+  const [samplePower, setSamplePower] = useState(80);
+  const [sampleLift, setSampleLift] = useState(10);
+  const [sampleVariants, setSampleVariants] = useState(2);
+
+  const [durationBase, setDurationBase] = useState(10);
+  const [durationMde, setDurationMde] = useState(10);
+  const [durationVariants, setDurationVariants] = useState(2);
+  const [dailyVisitors, setDailyVisitors] = useState(1000);
+  const [durationTrafficPct, setDurationTrafficPct] = useState(100);
   const [aov, setAov] = useState(80);
-  const [postConfidence, setPostConfidence] = useState(95);
-  const [cv, setCv] = useState(10000);
-  const [cc, setCc] = useState(1000);
-  const [variantRows, setVariantRows] = useState([{ id: 1, name: "Variation 1", visitors: 10000, conversions: 1120 }]);
 
-  const variantCount = Math.max(1, Math.floor(safe(variants, 1)));
-  const totalGroups = variantCount + 1;
+  const [weeklyTraffic, setWeeklyTraffic] = useState(7000);
+  const [weeklyConversions, setWeeklyConversions] = useState(700);
+  const [preVariants, setPreVariants] = useState(2);
+  const [preConfidence, setPreConfidence] = useState(95);
+  const [prePower, setPrePower] = useState(80);
 
-  const pre = useMemo(() => {
-    const perGroup = sampleSizePerGroup({ confidence, power, baseline, mde, relative: relative === "yes", variants: variantCount, sided, correction: correction === "yes" });
-    const total = perGroup * totalGroups;
-    const weeks = safe(weeklyTraffic) > 0 ? total / safe(weeklyTraffic) : NaN;
-    const targetRate = relative === "yes" ? safe(baseline) * (1 + safe(mde) / 100) : safe(baseline) + safe(mde);
-    const mdeRows = [1, 2, 3, 4, 5, 6].map((week) => {
-      const visitorsPerGroup = (safe(weeklyTraffic) * week) / totalGroups;
-      const detectable = solveDetectableEffect({ confidence, power, baseline, visitorsPerGroup, variants: variantCount, sided, correction: correction === "yes" });
-      return { week, visitorsPerGroup, ...detectable };
-    });
-    return { perGroup, total, weeks, targetRate, mdeRows };
-  }, [confidence, power, baseline, mde, relative, variantCount, sided, correction, weeklyTraffic, totalGroups]);
+  const controlCr = safe(controlUsers) ? safe(controlConversions) / safe(controlUsers) : NaN;
+  const totalObserved = safe(controlUsers) + variants.reduce((s, v) => s + safe(v.users), 0);
+  const observedDailyTraffic = safe(testDays) ? totalObserved / safe(testDays) : NaN;
+  const estimatedDailyTotalTraffic = safe(trafficPct) ? observedDailyTraffic / (safe(trafficPct) / 100) : NaN;
+  const requiredPerVariantFromObserved = sampleSizePerGroup({ confidence: sampleConfidence, power: samplePower, baselinePct: controlCr * 100, liftPct: sampleLift, variantsIncludingControl: variants.length + 1, sided: side });
+  const additionalDays = Number.isFinite(requiredPerVariantFromObserved) && observedDailyTraffic ? Math.max(0, ((requiredPerVariantFromObserved * (variants.length + 1)) - totalObserved) / observedDailyTraffic) : NaN;
 
-  const post = useMemo(() => {
-    const analyses = variantRows.map((row) => ({ ...row, stats: analyzeVariant(cv, cc, row.visitors, row.conversions, postConfidence) }));
-    const totalObserved = safe(cv) + variantRows.reduce((sum, row) => sum + safe(row.visitors), 0);
-    const observedDailyTestTraffic = safe(testDays) > 0 ? totalObserved / safe(testDays) : NaN;
-    const estimatedDailyTotalTraffic = safe(trafficPct) > 0 ? observedDailyTestTraffic / (safe(trafficPct) / 100) : NaN;
-    const controlCr = analyzeVariant(cv, cc, variantRows[0]?.visitors || 1, variantRows[0]?.conversions || 0, postConfidence).p1 * 100;
-    const requiredPerGroup = sampleSizePerGroup({ confidence: postConfidence, power, baseline: controlCr, mde, relative: relative === "yes", variants: variantRows.length, sided, correction: correction === "yes" });
-    const requiredTotal = requiredPerGroup * (variantRows.length + 1);
-    const additionalDays = observedDailyTestTraffic > 0 ? Math.max(0, (requiredTotal - totalObserved) / observedDailyTestTraffic) : NaN;
-    return { analyses, totalObserved, observedDailyTestTraffic, estimatedDailyTotalTraffic, requiredPerGroup, requiredTotal, additionalDays };
-  }, [variantRows, cv, cc, postConfidence, testDays, trafficPct, power, mde, relative, sided, correction]);
+  const sampleRequired = useMemo(() => sampleSizePerGroup({ confidence: sampleConfidence, power: samplePower, baselinePct: sampleBase, liftPct: sampleLift, variantsIncludingControl: sampleVariants, sided: side }), [sampleConfidence, samplePower, sampleBase, sampleLift, sampleVariants, side]);
 
-  const updateVariant = (id, key, value) => {
-    setVariantRows((rows) => rows.map((row) => row.id === id ? { ...row, [key]: value } : row));
+  const durationRequired = useMemo(() => {
+    const per = sampleSizePerGroup({ confidence: sampleConfidence, power: samplePower, baselinePct: durationBase, liftPct: durationMde, variantsIncludingControl: durationVariants, sided: side });
+    const total = per * Math.max(2, safe(durationVariants, 2));
+    const dailyInTest = safe(dailyVisitors) * (safe(durationTrafficPct) / 100);
+    return dailyInTest ? total / dailyInTest : NaN;
+  }, [sampleConfidence, samplePower, durationBase, durationMde, durationVariants, side, dailyVisitors, durationTrafficPct]);
+
+  const mdeTable = [1, 2, 3, 4, 5, 6].map((week) => {
+    const visitorsPerVariant = safe(dailyVisitors) * 7 * week * (safe(durationTrafficPct) / 100) / Math.max(2, safe(durationVariants, 2));
+    const mde = solveMdeForVisitors({ confidence: sampleConfidence, power: samplePower, baselinePct: durationBase, visitorsPerVariant, variantsIncludingControl: durationVariants, sided: side });
+    return { week, visitorsPerVariant, mde };
+  });
+
+  const preBaseCr = safe(weeklyTraffic) ? (safe(weeklyConversions) / safe(weeklyTraffic)) * 100 : NaN;
+  const preRows = [1, 2, 3, 4, 5, 6].map((week) => {
+    const visitorsPerVariant = safe(weeklyTraffic) * week / Math.max(2, safe(preVariants, 2));
+    const mde = solveMdeForVisitors({ confidence: preConfidence, power: prePower, baselinePct: preBaseCr, visitorsPerVariant, variantsIncludingControl: preVariants, sided: "one" });
+    return { week, visitorsPerVariant, mde };
+  });
+
+  const bestVariant = variants.map((row, index) => ({ index, stats: analyze(controlUsers, controlConversions, row.users, row.conversions, sampleConfidence, side) })).sort((a, b) => b.stats.lift - a.stats.lift)[0];
+  const bestLift = bestVariant ? bestVariant.stats.lift * 100 : NaN;
+  const bestP = bestVariant ? (side === "one" ? bestVariant.stats.oneP : bestVariant.stats.twoP) : NaN;
+
+  const testSummary = [
+    { label: "Control CR", value: pct(controlCr * 100) },
+    { label: "Best lift", value: pct(bestLift) },
+    { label: "P-value", value: Number.isFinite(bestP) ? bestP.toFixed(4) : "---" },
+    { label: "Required / group", value: fmt(requiredPerVariantFromObserved) },
+    { label: "Extra days", value: fmt(additionalDays, 1) },
+    { label: "Method", value: method === "bayesian" ? "Bayesian" : "Z Test" },
+  ];
+
+  const preSummary = [
+    { label: "Weekly traffic", value: fmt(safe(weeklyTraffic)) },
+    { label: "Weekly conv.", value: fmt(safe(weeklyConversions)) },
+    { label: "Baseline CR", value: pct(preBaseCr) },
+    { label: "Variants", value: fmt(safe(preVariants)) },
+    { label: "Confidence", value: pct(safe(preConfidence), 0) },
+    { label: "Power", value: pct(safe(prePower), 0) },
+  ];
+
+  const addDummy = () => {
+    setTestDays(14);
+    setTrafficPct(100);
+    setControlUsers(10000);
+    setControlConversions(1000);
+    setVariants([{ id: 1, users: 10000, conversions: 1120 }]);
+    setSampleBase(10);
+    setSampleConfidence(95);
+    setSamplePower(80);
+    setSampleLift(10);
+    setSampleVariants(2);
+    setDurationBase(10);
+    setDurationMde(10);
+    setDurationVariants(2);
+    setDailyVisitors(1000);
+    setDurationTrafficPct(100);
+    setAov(80);
+    setWeeklyTraffic(7000);
+    setWeeklyConversions(700);
+    setPreVariants(2);
+    setPreConfidence(95);
+    setPrePower(80);
   };
-  const addVariant = () => {
-    setVariantRows((rows) => [...rows, { id: Date.now(), name: `Variation ${rows.length + 1}`, visitors: 10000, conversions: 1100 }]);
-  };
-  const removeVariant = (id) => {
-    setVariantRows((rows) => rows.length <= 1 ? rows : rows.filter((row) => row.id !== id));
-  };
+
+  const addVariant = () => setVariants(rows => [...rows, { id: Date.now(), users: 10000, conversions: 1100 }]);
+  const updateVariant = (id, key, value) => setVariants(rows => rows.map(row => row.id === id ? { ...row, [key]: value } : row));
+  const removeVariant = (id) => setVariants(rows => rows.length <= 1 ? rows : rows.filter(row => row.id !== id));
 
   return (
-    <main className="min-h-screen bg-[#f6f2e8] text-slate-950">
-      <section className="mx-auto max-w-7xl px-5 py-8 md:px-8 md:py-12">
-        <header className="grid gap-8 rounded-[2rem] bg-slate-950 p-6 text-white md:grid-cols-[1.1fr_0.9fr] md:p-10">
-          <div>
-            <div className="mb-5 inline-flex rounded-full border border-white/20 px-3 py-1 text-xs font-bold uppercase tracking-[0.18em] text-amber-200">AB+ Test Calculator Recreation</div>
-            <h1 className="max-w-3xl text-4xl font-black tracking-tight md:text-6xl">Plan, run, and analyze A/B tests with explicit assumptions.</h1>
-            <p className="mt-5 max-w-2xl text-base leading-7 text-slate-300 md:text-lg">A functional recreation combining the current CXL calculator structure with the archived AB+ calculator’s broader planning, duration, MDE, multi-variant, and monetary-contribution checks.</p>
-          </div>
-          <div className="grid content-end gap-3 rounded-3xl border border-white/10 bg-white/5 p-5">
-            <p className="text-sm font-semibold uppercase tracking-[0.14em] text-slate-400">Implemented modules</p>
-            <ul className="space-y-2 text-sm text-slate-200">
-              <li>• Sample size per group, total sample, estimated duration</li>
-              <li>• MDE by one to six weeks</li>
-              <li>• Z-test, confidence intervals, one-sided and two-sided p-values</li>
-              <li>• Relative-difference statistics and Bayesian approximation</li>
-              <li>• Additional days and projected monetary contribution</li>
-            </ul>
+    <main className="min-h-screen text-stone-950" style={{ backgroundColor: COLORS.bg }}>
+      <div className="border-b border-stone-200 bg-[#4A225D] px-4 py-2.5 text-center text-xs font-semibold leading-5 text-white md:text-sm">Independent A/B test calculator recreation. Focus: full functionality, readable layout, and auditable assumptions.</div>
+
+      <StickySummary activeTab={tab} testSummary={testSummary} preSummary={preSummary} />
+
+      <section className="mx-auto max-w-[1320px] px-4 py-6 md:px-6 md:py-8 lg:px-8">
+        <header className="mx-auto max-w-[980px] text-center">
+          <div className="text-[11px] font-black uppercase tracking-[0.18em] text-[#165E83]">A/B Test Calculator</div>
+          <h1 className="mt-2 text-[34px] font-black leading-[1.05] tracking-tight text-stone-950 md:text-[56px]">Plan and analyze A/B tests without guessing.</h1>
+          <p className="mx-auto mt-4 max-w-[760px] text-[15px] leading-6 text-stone-700 md:text-base">This recreation preserves the full workflow: test duration, test data, sample size, duration planning, monetary contribution, MDE table, Bayesian view, Z-test view, and pre-test analysis.</p>
+
+          <div className="mt-6 grid gap-3 text-left md:grid-cols-2">
+            <div className="rounded-2xl border border-stone-200 bg-white/75 p-4">
+              <div className="text-xs font-black uppercase tracking-[0.12em] text-[#165E83]">Test analysis</div>
+              <ul className="mt-2 space-y-1.5 text-[13px] leading-5 text-stone-700">
+                <li>Does the variant beat the control?</li>
+                <li>Does the test have enough sample and duration?</li>
+                <li>What is the projected monetary contribution?</li>
+              </ul>
+            </div>
+            <div className="rounded-2xl border border-stone-200 bg-white/75 p-4">
+              <div className="text-xs font-black uppercase tracking-[0.12em] text-[#4A225D]">Pre-test analysis</div>
+              <ul className="mt-2 space-y-1.5 text-[13px] leading-5 text-stone-700">
+                <li>What MDE is detectable by week?</li>
+                <li>How does traffic split affect visitors per variant?</li>
+                <li>How do confidence and power change feasibility?</li>
+              </ul>
+            </div>
           </div>
         </header>
 
-        <div className="sticky top-3 z-10 mx-auto mt-6 flex max-w-xl rounded-2xl border border-slate-200 bg-white/90 p-1 shadow-xl backdrop-blur">
-          <button onClick={() => setMode("pre")} className={`flex-1 rounded-xl px-4 py-3 text-sm font-black ${mode === "pre" ? "bg-slate-950 text-white" : "text-slate-600"}`}>Pre-Test Calculator</button>
-          <button onClick={() => setMode("post")} className={`flex-1 rounded-xl px-4 py-3 text-sm font-black ${mode === "post" ? "bg-slate-950 text-white" : "text-slate-600"}`}>Test Result Calculator</button>
+        <div className="sticky top-[57px] z-20 mt-7 rounded-2xl border border-stone-200 bg-white/90 p-1 shadow-sm backdrop-blur md:top-[62px] md:mx-auto md:w-[520px]">
+          <div className="grid grid-cols-2 gap-1">
+            <button onClick={() => setTab("test")} className={`rounded-xl px-3 py-3 text-sm font-black transition ${tab === "test" ? "bg-[#165E83] text-white" : "text-stone-500 hover:bg-stone-50"}`}>Test Analysis</button>
+            <button onClick={() => setTab("pre")} className={`rounded-xl px-3 py-3 text-sm font-black transition ${tab === "pre" ? "bg-[#165E83] text-white" : "text-stone-500 hover:bg-stone-50"}`}>Pre-Test Analysis</button>
+          </div>
         </div>
 
-        {mode === "pre" ? (
-          <section className="mt-8 grid gap-6 lg:grid-cols-[0.95fr_1.05fr]">
-            <div className="rounded-[2rem] border border-slate-200 bg-white/70 p-5 shadow-sm md:p-7">
-              <h2 className="text-2xl font-black">Pre-Test Inputs</h2>
-              <p className="mt-2 text-sm leading-6 text-slate-600">Use this before launch to decide whether the expected lift is detectable with available traffic.</p>
-              <div className="mt-6 grid gap-4 sm:grid-cols-2">
-                <Field label="Confidence level" value={confidence} setValue={setConfidence} suffix="%" />
-                <Field label="Statistical power" value={power} setValue={setPower} suffix="%" />
-                <Field label="Control conversion rate" value={baseline} setValue={setBaseline} suffix="%" />
-                <Field label="Minimum detectable effect" value={mde} setValue={setMde} suffix="%" />
-                <Field label="Variants excluding control" value={variants} setValue={setVariants} step="1" />
-                <Field label="Weekly traffic" value={weeklyTraffic} setValue={setWeeklyTraffic} step="1" />
-              </div>
-              <div className="mt-5 grid gap-3">
-                <Toggle label="MDE expression" value={relative} setValue={setRelative} options={[{ value: "yes", label: "Relative" }, { value: "no", label: "Absolute" }]} />
-                <Toggle label="Test direction" value={sided} setValue={setSided} options={[{ value: "one", label: "One-sided" }, { value: "two", label: "Two-sided" }]} />
-                <Toggle label="Multiple-variant correction" value={correction} setValue={setCorrection} options={[{ value: "yes", label: "Conservative" }, { value: "no", label: "None" }]} />
-              </div>
-            </div>
+        <div className="mt-4 text-center text-[13px] text-stone-600">Need sample inputs? <button onClick={addDummy} className="font-black text-[#165E83] underline underline-offset-4">Add dummy test data</button></div>
 
-            <div className="rounded-[2rem] border border-slate-200 bg-white p-5 shadow-sm md:p-7">
-              <h2 className="text-2xl font-black">Pre-Test Results</h2>
-              <div className="mt-5 grid gap-4 sm:grid-cols-2">
-                <Metric label="Sample size per group" value={fmt(pre.perGroup)} />
-                <Metric label="Total sample size" value={fmt(pre.total)} />
-                <Metric label="Estimated duration" value={`${fmt(pre.weeks, 1)} weeks`} tone={pre.weeks <= 6 ? "good" : "bad"} />
-                <Metric label="Target variant CR" value={pct(pre.targetRate)} />
-              </div>
-              <div className="mt-6 overflow-hidden rounded-2xl border border-slate-200 bg-white">
-                <div className="bg-slate-950 px-4 py-3 text-sm font-black text-white">Minimal Detectable Effect by Test Length</div>
-                <table className="w-full text-left text-sm">
-                  <thead className="bg-slate-50 text-xs uppercase tracking-[0.12em] text-slate-500">
-                    <tr>
-                      <th className="px-4 py-3">Weeks</th>
-                      <th className="px-4 py-3">Visitors per group</th>
-                      <th className="px-4 py-3">Absolute MDE</th>
-                      <th className="px-4 py-3">Relative MDE</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {pre.mdeRows.map((row) => (
-                      <tr key={row.week} className="border-t border-slate-100">
-                        <td className="px-4 py-3 font-black">{row.week}</td>
-                        <td className="px-4 py-3">{fmt(row.visitorsPerGroup)}</td>
-                        <td className="px-4 py-3">{pct(row.absolute)}</td>
-                        <td className="px-4 py-3">{pct(row.relative)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <div className="mt-6 rounded-2xl bg-[#f6f2e8] p-5 text-sm leading-7 text-slate-700">
-                <p><strong>Formula note:</strong> sample size uses a normal approximation for two proportions. Conservative mode divides alpha by the number of variant comparisons. Duration assumes even allocation across control and variants.</p>
-              </div>
-            </div>
-          </section>
-        ) : (
-          <section className="mt-8 grid gap-6 lg:grid-cols-[0.9fr_1.1fr]">
-            <div className="rounded-[2rem] border border-slate-200 bg-white/70 p-5 shadow-sm md:p-7">
-              <h2 className="text-2xl font-black">Test Data</h2>
-              <p className="mt-2 text-sm leading-6 text-slate-600">Use after the planned sample size has been reached. Repeated peeking inflates false-positive risk.</p>
-              <div className="mt-6 grid gap-4 sm:grid-cols-2">
-                <Field label="Test duration" value={testDays} setValue={setTestDays} suffix="days" />
-                <Field label="Traffic in test" value={trafficPct} setValue={setTrafficPct} suffix="%" />
-                <Field label="Confidence level" value={postConfidence} setValue={setPostConfidence} suffix="%" />
-                <Field label="Average order value" value={aov} setValue={setAov} suffix="$" />
-                <Field label="Control visitors" value={cv} setValue={setCv} />
-                <Field label="Control conversions" value={cc} setValue={setCc} />
-              </div>
-              <div className="mt-6 space-y-4">
-                {variantRows.map((row, index) => (
-                  <div key={row.id} className="rounded-2xl border border-slate-200 bg-white p-4">
-                    <div className="mb-3 flex items-center justify-between gap-3">
-                      <input value={row.name} onChange={(e) => updateVariant(row.id, "name", e.target.value)} className="w-full bg-transparent text-lg font-black outline-none" />
-                      {variantRows.length > 1 && <button onClick={() => removeVariant(row.id)} className="rounded-full bg-rose-50 px-3 py-1 text-xs font-black text-rose-700">Remove</button>}
-                    </div>
-                    <div className="grid gap-4 sm:grid-cols-2">
-                      <Field label="Variant visitors" value={row.visitors} setValue={(v) => updateVariant(row.id, "visitors", v)} />
-                      <Field label="Variant conversions" value={row.conversions} setValue={(v) => updateVariant(row.id, "conversions", v)} />
-                    </div>
+        {tab === "test" ? (
+          <div className="mt-7 space-y-8 md:space-y-10">
+            <div className="flex gap-5">
+              <StepLabel number="1" text="How long has the test been running?" />
+              <Panel className="grid min-w-0 flex-1 md:grid-cols-[1fr_260px] lg:grid-cols-[1fr_330px]">
+                <div className="p-4 md:p-5 lg:p-6">
+                  <PanelTitle title="Test duration" subtitle="Use elapsed days and traffic allocation to check whether the test has enough running time." />
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <InputField label="Test duration" value={testDays} setValue={setTestDays} suffix="days" />
+                    <InputField label="Percent of traffic in test" value={trafficPct} setValue={setTrafficPct} suffix="%" />
                   </div>
-                ))}
-                <button onClick={addVariant} className="w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm font-black text-slate-800 shadow-sm">+ Add Variant</button>
-              </div>
-            </div>
-
-            <div className="space-y-6">
-              <div className="rounded-[2rem] border border-slate-200 bg-white p-5 shadow-sm md:p-7">
-                <h2 className="text-2xl font-black">Sample Size and Duration Check</h2>
-                <div className="mt-5 grid gap-4 sm:grid-cols-3">
-                  <Metric label="Required per group" value={fmt(post.requiredPerGroup)} />
-                  <Metric label="Required total" value={fmt(post.requiredTotal)} />
-                  <Metric label="Additional days needed" value={fmt(post.additionalDays, 1)} tone={post.additionalDays <= 0 ? "good" : "bad"} />
                 </div>
-              </div>
+                <OutputArea label="Additional days needed" value={fmt(additionalDays, 1)} tone={additionalDays <= 0 ? "good" : "bad"} />
+              </Panel>
+            </div>
 
-              {post.analyses.map(({ id, name, visitors, conversions, stats }) => {
-                const alpha = 1 - safe(postConfidence) / 100;
-                const significant = stats.oneSidedP < alpha;
-                const monthlyTransactions = stats.diff * post.estimatedDailyTotalTraffic * 30;
-                const monthlyContribution = monthlyTransactions * safe(aov);
-                return (
-                  <div key={id} className="rounded-[2rem] border border-slate-200 bg-white p-5 shadow-sm md:p-7">
-                    <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-                      <div>
-                        <h2 className="text-2xl font-black">{name} Results</h2>
-                        <p className="mt-1 text-sm text-slate-600">Compared against control using visitors and conversions supplied above.</p>
-                      </div>
-                      <div className={`rounded-full px-4 py-2 text-sm font-black ${significant ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}`}>{significant ? "One-sided significant" : "Not significant yet"}</div>
-                    </div>
-
-                    <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                      <Metric label="Control CR" value={pct(stats.p1 * 100)} />
-                      <Metric label="Variant CR" value={pct(stats.p2 * 100)} />
-                      <Metric label="Lift" value={pct(stats.lift * 100)} tone={stats.lift > 0 ? "good" : "bad"} />
-                      <Metric label="Extra transactions" value={fmt(stats.diff * safe(visitors), 1)} tone={stats.diff > 0 ? "good" : "bad"} />
-                    </div>
-
-                    <div className="mt-6 grid gap-4 xl:grid-cols-2">
-                      <div className="rounded-2xl border border-slate-200 p-5">
-                        <div className="mb-2 text-sm font-black uppercase tracking-[0.12em] text-slate-500">Absolute differences</div>
-                        <CompactRow label="Absolute difference" value={pct(stats.diff * 100)} />
-                        <CompactRow label="Confidence interval" value={`${pct(stats.ciLow * 100)} to ${pct(stats.ciHigh * 100)}`} />
-                        <CompactRow label="Right-sided interval" value={`${pct(stats.rightLow * 100)} to +∞`} />
-                        <CompactRow label="Left-sided interval" value={`-∞ to ${pct(stats.leftHigh * 100)}`} />
-                        <CompactRow label="Value ± SE" value={`${pct(stats.diff * 100)} ± ${pct(stats.seAbs * 100)}`} />
-                        <CompactRow label="P-value one-sided" value={stats.oneSidedP.toFixed(4)} />
-                        <CompactRow label="P-value two-sided" value={stats.twoSidedP.toFixed(4)} />
-                        <CompactRow label="Z-score" value={stats.z.toFixed(3)} />
-                      </div>
-
-                      <div className="rounded-2xl border border-slate-200 p-5">
-                        <div className="mb-2 text-sm font-black uppercase tracking-[0.12em] text-slate-500">Relative differences</div>
-                        <CompactRow label="Relative confidence interval" value={`${pct(stats.relCiLow * 100)} to ${pct(stats.relCiHigh * 100)}`} />
-                        <CompactRow label="Relative right-sided interval" value={`${pct(stats.relRightLow * 100)} to +∞`} />
-                        <CompactRow label="Relative left-sided interval" value={`-∞ to ${pct(stats.relLeftHigh * 100)}`} />
-                        <CompactRow label="Relative difference ± SE" value={`${pct(stats.lift * 100)} ± ${pct(stats.seRel * 100)}`} />
-                        <CompactRow label="Relative p-value" value={stats.relP.toFixed(4)} />
-                        <CompactRow label="Relative z-score" value={stats.relZ.toFixed(3)} />
-                        <CompactRow label="Bayesian probability: variant wins" value={pct(stats.bayesVariant * 100)} />
-                        <CompactRow label="Bayesian probability: control wins" value={pct(stats.bayesControl * 100)} />
-                        <CompactRow label="Bayes factor H1/H0" value={fmt(stats.bayesFactor, 2)} />
-                      </div>
-                    </div>
-
-                    <div className="mt-6 rounded-2xl bg-[#f6f2e8] p-5 text-sm leading-7 text-slate-700">
-                      <p><strong>Projected monetary contribution:</strong> {money(monthlyContribution)} per month, estimated by applying the observed absolute conversion-rate difference to estimated total monthly traffic and multiplying by AOV. This is a projection, not proof of realized revenue.</p>
+            <div className="flex gap-5">
+              <StepLabel number="2" text="Test data" />
+              <div className="min-w-0 flex-1 space-y-4">
+                <Panel className="grid md:grid-cols-[1fr_260px] lg:grid-cols-[1fr_330px]">
+                  <div className="border-l-4 border-[#165E83] p-4 md:p-5 lg:p-6">
+                    <PanelTitle title="Control" subtitle="Base experience or original page." />
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <InputField label="Users or sessions" value={controlUsers} setValue={setControlUsers} />
+                      <InputField label="Conversions" value={controlConversions} setValue={setControlConversions} />
                     </div>
                   </div>
-                );
-              })}
+                  <OutputArea label="Conversion rate" value={pct(controlCr * 100)} />
+                </Panel>
+
+                {variants.map((row, index) => {
+                  const stats = analyze(controlUsers, controlConversions, row.users, row.conversions, sampleConfidence, side);
+                  const extraTransactions = stats.diff * safe(row.users);
+                  const monthlyContribution = stats.diff * estimatedDailyTotalTraffic * 30 * safe(aov);
+                  return (
+                    <Panel key={row.id} className="relative grid md:grid-cols-[1fr_1.25fr]">
+                      {variants.length > 1 && <button onClick={() => removeVariant(row.id)} className="absolute right-3 top-2 rounded-full px-2 py-1 text-lg font-black text-stone-500 hover:bg-stone-100">×</button>}
+                      <div className="border-l-4 border-[#E95464] p-4 md:p-5 lg:p-6">
+                        <PanelTitle title={`Variation ${index + 1}`} subtitle="Candidate experience compared with control." />
+                        <div className="grid gap-4 md:grid-cols-2">
+                          <InputField label="Users or sessions" value={row.users} setValue={(v) => updateVariant(row.id, "users", v)} />
+                          <InputField label="Conversions" value={row.conversions} setValue={(v) => updateVariant(row.id, "conversions", v)} />
+                        </div>
+                      </div>
+                      <div className="grid gap-3 bg-[#EAF6F6] p-4 sm:grid-cols-2 lg:grid-cols-4">
+                        <OutputMini label="Conversion rate" value={pct(stats.p2 * 100)} tone="bad" />
+                        <OutputMini label="Lift" value={pct(stats.lift * 100)} tone={stats.lift >= 0 ? "good" : "bad"} />
+                        <OutputMini label="Extra transactions" value={fmt(extraTransactions, 1)} tone={extraTransactions >= 0 ? "good" : "bad"} />
+                        <OutputMini label="Monthly contribution" value={money(monthlyContribution)} tone={monthlyContribution >= 0 ? "good" : "bad"} />
+                      </div>
+                    </Panel>
+                  );
+                })}
+                <button onClick={addVariant} className="rounded-xl bg-[#E95464] px-5 py-3 text-sm font-black text-white shadow-sm hover:brightness-95">+ Add Variant</button>
+              </div>
             </div>
-          </section>
+
+            <div className="flex gap-5">
+              <StepLabel number="3" text="Statistical details, sample size, duration, contribution, and MDE tools." />
+              <div className="grid min-w-0 flex-1 gap-4 lg:grid-cols-4">
+                <Panel className="flex flex-col">
+                  <div className="grow p-4 md:p-5">
+                    <PanelTitle title="Sample size calculator" subtitle="Required visitors per variant." />
+                    <div className="space-y-4">
+                      <InputField label="Baseline conversion rate" value={sampleBase} setValue={setSampleBase} suffix="%" />
+                      <InputField label="Confidence level" value={sampleConfidence} setValue={setSampleConfidence} suffix="%" />
+                      <InputField label="Statistical power" value={samplePower} setValue={setSamplePower} suffix="%" />
+                      <InputField label="Conversion rate lift" value={sampleLift} setValue={setSampleLift} suffix="%" />
+                      <InputField label="Number of variants including control" value={sampleVariants} setValue={setSampleVariants} />
+                    </div>
+                  </div>
+                  <OutputArea label="Required sample size per variant" value={fmt(sampleRequired)} tone="good" />
+                </Panel>
+
+                <Panel className="flex flex-col">
+                  <div className="grow p-4 md:p-5">
+                    <PanelTitle title="Duration calculator" subtitle="Total days needed under current traffic." />
+                    <div className="space-y-4">
+                      <InputField label="Baseline conversion rate" value={durationBase} setValue={setDurationBase} suffix="%" />
+                      <InputField label="Minimal detectable effect" value={durationMde} setValue={setDurationMde} suffix="%" />
+                      <InputField label="Number of variants including control" value={durationVariants} setValue={setDurationVariants} />
+                      <InputField label="Number of daily visitors" value={dailyVisitors} setValue={setDailyVisitors} />
+                      <InputField label="Percent traffic in test" value={durationTrafficPct} setValue={setDurationTrafficPct} suffix="%" />
+                    </div>
+                  </div>
+                  <OutputArea label="How long to run the test" value={`${fmt(durationRequired, 1)} days`} tone="good" />
+                </Panel>
+
+                <Panel className="p-4 md:p-5">
+                  <PanelTitle title="Monthly monetary contribution" subtitle="Uses the variant lift, estimated total traffic, and average order value." />
+                  <InputField label="Average order value" value={aov} setValue={setAov} suffix="$" />
+                  <div className="mt-4 rounded-xl bg-[#FAD689]/35 p-3 text-[12px] leading-5 text-stone-700">Projection only. This does not replace revenue attribution or experiment guardrail checks.</div>
+                </Panel>
+
+                <Panel className="bg-[#EAF6F6] p-4 md:p-5">
+                  <PanelTitle title="Minimal detectable effect" subtitle="Detectable lift by test length." />
+                  <DenseTable>
+                    <table className="w-full text-left text-[13px]">
+                      <thead className="bg-white/70 text-[11px] uppercase tracking-[0.08em] text-stone-500">
+                        <tr><th className="px-3 py-2">Week</th><th className="px-3 py-2">Visitors / variant</th><th className="px-3 py-2">MDE</th></tr>
+                      </thead>
+                      <tbody>
+                        {mdeTable.map(row => <tr key={row.week} className="border-t border-stone-200"><td className="px-3 py-2 font-bold">{row.week}</td><td className="px-3 py-2 tabular-nums">{fmt(row.visitorsPerVariant)}</td><td className="px-3 py-2 font-black tabular-nums text-[#E95464]">{pct(row.mde, 2)}</td></tr>)}
+                      </tbody>
+                    </table>
+                  </DenseTable>
+                </Panel>
+              </div>
+            </div>
+
+            <div className="flex gap-5">
+              <StepLabel number="4" text="Results" />
+              <div className="min-w-0 flex-1">
+                <div className="mb-3 grid gap-3 lg:grid-cols-[1fr_auto] lg:items-end">
+                  <PanelTitle title="Results" subtitle="Switch between Bayesian approximation and two-proportion Z-test outputs." />
+                  <div className="grid grid-cols-2 overflow-hidden rounded-xl border border-stone-200 bg-white p-1">
+                    <button onClick={() => setMethod("bayesian")} className={`rounded-lg px-4 py-2.5 text-sm font-black ${method === "bayesian" ? "bg-[#165E83] text-white" : "text-stone-600"}`}>Bayesian</button>
+                    <button onClick={() => setMethod("z")} className={`rounded-lg px-4 py-2.5 text-sm font-black ${method === "z" ? "bg-[#165E83] text-white" : "text-stone-600"}`}>Z Test</button>
+                  </div>
+                </div>
+                <Panel className="bg-[#EAF6F6] p-4 md:p-6">
+                  <div className="mb-5 flex flex-wrap gap-4 text-sm font-semibold text-stone-700">
+                    <label className="flex items-center gap-2"><input type="radio" checked={side === "one"} onChange={() => setSide("one")} /> One-sided</label>
+                    <label className="flex items-center gap-2"><input type="radio" checked={side === "two"} onChange={() => setSide("two")} /> Two-sided</label>
+                  </div>
+                  <div className="space-y-4">
+                    {variants.map((row, index) => {
+                      const stats = analyze(controlUsers, controlConversions, row.users, row.conversions, sampleConfidence, side);
+                      const pValue = side === "one" ? stats.oneP : stats.twoP;
+                      const significant = pValue < (1 - safe(sampleConfidence) / 100);
+                      return (
+                        <div key={row.id} className="rounded-2xl border border-sky-100 bg-white/65 p-4">
+                          <div className="mb-3 flex flex-col gap-1 md:flex-row md:items-center md:justify-between">
+                            <h3 className="text-lg font-black">Variation {index + 1}</h3>
+                            <span className={`inline-flex w-fit rounded-full px-3 py-1 text-[12px] font-black ${significant ? "bg-emerald-100 text-emerald-800" : "bg-[#FAD689]/45 text-stone-800"}`}>{significant ? "Variant beats control" : "No conclusive winner"}</span>
+                          </div>
+                          {method === "bayesian" ? (
+                            <div className="grid gap-3 md:grid-cols-3">
+                              <ResultLine label="Probability variant wins" value={pct(stats.bayesVariant * 100)} />
+                              <ResultLine label="Probability control wins" value={pct(stats.bayesControl * 100)} />
+                              <ResultLine label="Bayes factor H1/H0" value={fmt(stats.bayesFactor, 2)} />
+                            </div>
+                          ) : (
+                            <div className="grid gap-3 md:grid-cols-3">
+                              <ResultLine label="Confidence interval" value={side === "one" ? `${pct(stats.ciLow * 100)} to +∞` : `${pct(stats.ciLow * 100)} to ${pct(stats.ciHigh * 100)}`} />
+                              <ResultLine label="P-value" value={pValue.toFixed(4)} />
+                              <ResultLine label="Z-score" value={stats.z.toFixed(3)} />
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </Panel>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-7 space-y-8 md:space-y-10">
+            <div className="flex gap-5">
+              <StepLabel number="1" text="Insert data from the page you want to test." />
+              <Panel className="min-w-0 flex-1 p-4 md:p-6">
+                <PanelTitle title="Test page data" subtitle="Weekly traffic is used for pre-test feasibility and MDE planning." />
+                <div className="grid gap-4 md:grid-cols-3">
+                  <InputField label="Weekly traffic" value={weeklyTraffic} setValue={setWeeklyTraffic} />
+                  <InputField label="Weekly conversions" value={weeklyConversions} setValue={setWeeklyConversions} />
+                  <InputField label="Number of variants including control" value={preVariants} setValue={setPreVariants} />
+                </div>
+              </Panel>
+            </div>
+
+            <div className="flex gap-5">
+              <StepLabel number="2" text="Results" />
+              <Panel className="grid min-w-0 flex-1 md:grid-cols-[300px_1fr]">
+                <div className="p-4 md:p-6">
+                  <PanelTitle title="CR, confidence, and power" subtitle="Baseline CR is derived from weekly conversions divided by weekly traffic." />
+                  <div className="space-y-4">
+                    <InputField label="Baseline conversion rate" value={Number.isFinite(preBaseCr) ? preBaseCr.toFixed(2) : ""} setValue={() => {}} suffix="%" />
+                    <InputField label="Confidence level" value={preConfidence} setValue={setPreConfidence} suffix="%" />
+                    <InputField label="Statistical power" value={prePower} setValue={setPrePower} suffix="%" />
+                  </div>
+                </div>
+                <div className="bg-[#EAF6F6] p-4 md:p-6">
+                  <DenseTable>
+                    <table className="w-full min-w-[560px] text-left text-sm">
+                      <thead className="bg-white/75 text-[11px] uppercase tracking-[0.08em] text-stone-500">
+                        <tr>
+                          <th className="px-3 py-2">Weeks running test</th>
+                          <th className="px-3 py-2">Minimal detectable effect</th>
+                          <th className="px-3 py-2">Visitors per variant</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {preRows.map(row => (
+                          <tr key={row.week} className="border-t border-stone-200">
+                            <td className="px-3 py-2 font-bold tabular-nums">{row.week}</td>
+                            <td className="px-3 py-2 font-black tabular-nums text-[#E95464]">{pct(row.mde, 2)}</td>
+                            <td className="px-3 py-2 tabular-nums">{fmt(row.visitorsPerVariant)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </DenseTable>
+                </div>
+              </Panel>
+            </div>
+          </div>
         )}
 
-        <footer className="mt-8 rounded-3xl border border-slate-200 bg-white/60 p-5 text-xs leading-6 text-slate-500">
-          Independent educational recreation. It does not copy CXL source code and cannot guarantee exact parity with CXL’s private implementation. Statistical outputs use documented approximations: two-proportion normal tests, delta-method relative intervals, and a normal approximation to Beta posterior win probability.
-        </footer>
+        <footer className="mt-12 border-t border-stone-200 py-6 text-center text-[12px] leading-5 text-stone-500">Independent recreation for testing and learning. Validate final experiment decisions with the full analytics context, data quality checks, and experiment governance rules.</footer>
       </section>
     </main>
   );
